@@ -66,15 +66,17 @@ void Server::start() {
 		for (int i = 0; i < clientsocks.size(); i++) {
 			code = recv(clientsocks[i], buffer, 200, 0);
 			if (code == 0) {
-				//client_addr = clientaddrs[i];
-				//client_ip = inet_ntoa(client_addr.sin_addr);
-				//client_port = ntohs(client_addr.sin_port);
-				//printf("%s:%d disconnected.\n", client_ip, client_port);
-				//clientsocks.erase(clientsocks.begin() + i);
-				//clientaddrs.erase(clientaddrs.begin() + i);
+				client_addr = clientaddrs[i];
+				client_ip = inet_ntoa(client_addr.sin_addr);
+				client_port = ntohs(client_addr.sin_port);
+				printf("%s:%d disconnected.\n", client_ip, client_port);
+				clientsocks.erase(clientsocks.begin() + i);
+				clientaddrs.erase(clientaddrs.begin() + i);
+				printf("now %d client(s) online.\n", clientsocks.size());
 				continue;
 			}
 			else if (code == SOCKET_ERROR) {
+				// force shutdown client belong here!
 				//printf("%d\n", code);
 				continue;
 			}
@@ -100,7 +102,7 @@ void Server::accept1() {
 		printf("connect from %s:%d.\n", client_ip, client_port);
 		clientsocks.push_back(client);
 		clientaddrs.push_back(clientaddr);
-		//printf("now %d client(s) online.\n", clientsocks.size());
+		printf("now %d client(s) online.\n", clientsocks.size());
 	}
 }
 

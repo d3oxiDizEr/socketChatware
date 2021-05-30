@@ -43,6 +43,9 @@ void Client::start() {
 	while (1) {
 		printf("input>>>");
 		scanf("%s", sendbuf);
+		if (sendbuf[0] == '0') {
+			break;
+		}
 		send(sock, sendbuf, 200, 0);
 	}
 }
@@ -61,5 +64,5 @@ void main() {
 	int code = client.init(5000);
 	printf("%d\n", code);
 	client.start();
-	//client.stop();
+	client.stop();
 }
