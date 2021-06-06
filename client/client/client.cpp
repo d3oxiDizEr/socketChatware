@@ -1,13 +1,17 @@
 ﻿#define PORT 5000
 
-#define M_LOGIN 1
-#define M_REGISTER 2
-#define M_PASSWORD 3
-#define M_CLOSE 4
+#define C_LOGIN 1
+#define C_REGISTER 2
+#define C_PASSWORD 3
+#define C_CLOSE 4
 
 #define S_UNLOGIN 5
 #define S_AUTHERR 6
-#define S_AUTHSUC 7
+#define S_AUTHSUC 8
+#define S_CLOSE 14
+
+#define M_END 15
+#define M_PART 16
 
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -23,26 +27,29 @@ struct userpass {
 	char c;
 	char name[20];
 	char pass[20];
+	char placeholder[159];
 };
 
 
 struct PACKAGE {
-	tm time;//36
+	char c;
 	char name[20];
-	char msg[144];
+	char msg[142];
+	char eomsg;
+	tm time;// size: 36 (time put last for align)
 };
 
 
-void copychars(char* dst, char* src, int num) {
+void copychars(char* dst, char* src, int bias1, int bias2, int num) {
 	for (int i = 0; i < num; i++) {
-		dst[i] = src[i];
+		dst[i + bias1] = src[i + bias2];
 	}
 }
 
 
 class Client {
 private:
-	void (*input)(char*);
+	int (*input)(char*, userpass*);
 	void (*recvmsg)(tm, char*, char*);
 	void (*authin)(userpass*);
 
@@ -50,12 +57,12 @@ private:
 	SOCKADDR_IN addr, serveraddr;
 	char sendbuf[200];
 	char recvbuf[200];
-	PACKAGE pkgp;
+	PACKAGE pkg;
 
 	void receive();
 
 public:
-	void set(void (*)(char*), void (*)(tm, char*, char*), void (*)(userpass*));
+	void set(int (*)(char*, userpass*), void (*)(tm, char*, char*), void (*)(userpass*));
 	int init();
 	void login();
 	void start();
@@ -63,7 +70,7 @@ public:
 	void stop();
 };
 
-void Client::set(void (*fp1)(char*), void (*fp2)(tm, char*, char*), void (*fp3)(userpass*)) {
+void Client::set(int (*fp1)(char*, userpass*), void (*fp2)(tm, char*, char*), void (*fp3)(userpass*)) {
 	input = fp1;
 	recvmsg = fp2;
 	authin = fp3;
@@ -98,30 +105,58 @@ void Client::login() {
 	userpass kvp;
 	while (recvbuf[0] != S_AUTHSUC) {
 		(*authin)(&kvp);
-		copychars(sendbuf, (char*)&kvp, sizeof(kvp));
-		send(sock, sendbuf, 200, 0);
+		send(sock, (char*)&kvp, 200, 0);
 		recv(sock, recvbuf, 200, 0);
 	}
 }
 
 void Client::start() {
+	int value, i;
+	PACKAGE pkg;
+	userpass kvp;
 	while (1) {
-		(*input)(sendbuf);
-		if (sendbuf[0] == '0') {
+		value = (*input)(sendbuf, &kvp);
+		switch (value) {
+		case 0:
+			return;
+		case 1:
+			i = 0;
+			pkg.c = M_PART;
+			while (strlen(sendbuf) - i * 142 > 142) {
+				memset(pkg.msg, 0x00, 142);
+				copychars(pkg.msg, sendbuf, 0, i * 142, 142);
+				send(sock, (char*)&pkg, 200, 0);
+				i++;
+			}
+			pkg.c = M_END;
+			memset(pkg.msg, 0x00, 142);
+			copychars(pkg.msg, sendbuf, 0, i * 142, strlen(sendbuf) - i * 142);
+			send(sock, (char*)&pkg, 200, 0);
+			break;
+		case 2:
+			kvp.c = C_PASSWORD;
+			send(sock, (char*)&kvp, 200, 0);
 			break;
 		}
-		send(sock, sendbuf, 200, 0);
+		Sleep(100);
 	}
 }
 
 void Client::receive() {
 	int code;
+	string s;
 	while (1) {
-		code = recv(sock, (char*)&pkgp, 200, 0);
+		s.~string();
+		code = recv(sock, (char*)&pkg, 200, 0);
 		if (code == SOCKET_ERROR) {
 			break;
 		}
-		(*recvmsg)(pkgp.time, pkgp.name, pkgp.msg);
+		while (pkg.c != M_END) {
+			s += pkg.msg;
+			recv(sock, (char*)&pkg, 200, 0);
+		}
+		s += pkg.msg;
+		(*recvmsg)(pkg.time, pkg.name, (char*)s.c_str());
 	}
 }
 
@@ -130,7 +165,7 @@ thread Client::receive_th() {
 }
 
 void Client::stop() {
-	sendbuf[0] = M_CLOSE;
+	sendbuf[0] = C_CLOSE;
 	send(sock, sendbuf, 200, 0);
 	Sleep(100);// needed to get send() function done
 	closesocket(sock);
@@ -138,8 +173,23 @@ void Client::stop() {
 }
 
 
-void input(char* s) {
-	scanf("%s", s);
+int input(char* s, userpass* kvp) {
+	int choice;
+	printf("stop[0], send message[1], change password[2]: ");
+	scanf("%d", &choice);
+	switch (choice) {
+	case 0:
+		break;
+	case 1:
+		printf("msg: ");
+		scanf("%s", s);
+		break;
+	case 2:
+		printf("new password: ");
+		scanf("%s", kvp->pass);
+		break;
+	}
+	return choice;
 }
 
 void recv_msg(tm time, char* name, char* msg) {
@@ -163,6 +213,7 @@ void main() {
 		printf("error code: %d.", code);
 		return;
 	}
+	printf("sizeof PACKAGE: %d\n", sizeof(PACKAGE));
 	printf("client on.\n");
 	client.login();
 

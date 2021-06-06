@@ -1,14 +1,18 @@
 ﻿#define PORT 5000
 #define DATA "data.txt"
 
-#define M_LOGIN 1
-#define M_REGISTER 2
-#define M_PASSWORD 3
-#define M_CLOSE 4
+#define C_LOGIN 1
+#define C_REGISTER 2
+#define C_PASSWORD 3
+#define C_CLOSE 4
 
 #define S_UNLOGIN 5
 #define S_AUTHERR 6
-#define S_AUTHSUC 7
+#define S_AUTHSUC 8
+#define S_CLOSE 14
+
+#define M_END 15
+#define M_PART 16
 
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -26,13 +30,16 @@ struct userpass {
 	char c;
 	char name[20];
 	char pass[20];
+	char placeholder[159];
 };
 
 
 struct PACKAGE {
-	tm time;//36
+	char c;
 	char name[20];
-	char msg[144];
+	char msg[142];
+	char eomsg;
+	tm time;// size: 36 (time put last for align)
 };
 
 
@@ -57,6 +64,7 @@ private:
 	void dbinit();
 	int login(char*, char*);
 	int signup(char*, char*);
+	int changepw(char*, char*);
 	void dbclose();
 
 	// socket
@@ -67,13 +75,13 @@ private:
 	vector<char*> usernames;
 	int addrlen = sizeof(addr);
 	unsigned long mode = 1;// non-blocking mode
-	PACKAGE pkg;
 	char buffer[200];
 	time_t tsec;
 	tm* tstruct;
 
 	void accept1();
 	void receive();
+	void broadcast(char*);
 	void disconnect(int);
 
 public:
@@ -125,6 +133,8 @@ int Server::signup(char* name, char* pass) {
 	}
 	// register
 	fseek(fp, 0, SEEK_END);
+	//fwrite(name, 1, 20, fp);
+	//fwrite(pass, 1, 20, fp);
 	for (int i = 0; i < 20; i++) {
 		fputc(name[i], fp);
 	}
@@ -132,6 +142,26 @@ int Server::signup(char* name, char* pass) {
 		fputc(pass[i], fp);
 	}
 	return S_AUTHSUC;
+}
+
+int Server::changepw(char* name, char* pass) {
+	char rname[21];
+	fseek(fp, 0, SEEK_SET);
+	while (fgets(rname, 21, fp) != NULL) {
+		if (strcmp(rname, name) == 0) {
+			// find username
+			fseek(fp, 0, SEEK_CUR);// needed! switch from reading to writing
+			//fwrite(pass, 1, 20, fp);
+			for (int i = 0; i < 20; i++) {
+				fputc(pass[i], fp);
+			}
+			fseek(fp, 0, SEEK_END);// needed!
+			return S_AUTHSUC;
+		}
+		// skip password
+		fseek(fp, 20L, SEEK_CUR);
+	}
+	return S_AUTHERR;
 }
 
 void Server::dbclose() {
@@ -224,12 +254,20 @@ thread Server::accept1_th() {
 	return thread(&Server::accept1, this);
 }
 
+void Server::broadcast(char* pkgp) {
+	for (int j = 0; j < clientsocks.size(); j++) {
+		if (usernames[j] == NULL) {
+			continue;
+		}
+		send(clientsocks[j], (char*)pkgp, 200, 0);
+	}
+}
+
 void Server::receive() {
 	int code;
 	userpass* p;
-	SOCKADDR_IN client_addr;
-	char* client_ip;
-	int client_port;
+	PACKAGE* recvpkgp = (PACKAGE*)buffer;
+	PACKAGE pkg;
 	while (1) {
 		for (int i = 0; i < clientsocks.size(); i++) {
 			code = recv(clientsocks[i], buffer, 200, 0);
@@ -245,10 +283,10 @@ void Server::receive() {
 				continue;
 			}
 			else {
-				if (buffer[0] == M_CLOSE) {
+				if (buffer[0] == C_CLOSE) {
 					disconnect(i);
 				}
-				else if (buffer[0] == M_LOGIN) {
+				else if (buffer[0] == C_LOGIN) {
 					p = (userpass*)buffer;
 					buffer[0] = login(p->name, p->pass);
 					if (buffer[0] == S_AUTHSUC) {
@@ -257,7 +295,7 @@ void Server::receive() {
 					}
 					send(clientsocks[i], buffer, 200, 0);
 				}
-				else if (buffer[0] == M_REGISTER) {
+				else if (buffer[0] == C_REGISTER) {
 					p = (userpass*)buffer;
 					buffer[0] = signup(p->name, p->pass);
 					if (buffer[0] == S_AUTHSUC) {
@@ -266,23 +304,35 @@ void Server::receive() {
 					}
 					send(clientsocks[i], buffer, 200, 0);
 				}
+
+				// users not login blocked here
 				else if (usernames[i] == NULL) {
 					buffer[0] = S_UNLOGIN;
 					send(clientsocks[i], buffer, 200, 0);
 				}
+				else if (buffer[0] == C_PASSWORD) {
+					p = (userpass*)buffer;
+					buffer[0] = changepw(usernames[i], p->pass);
+					//
+				}
 				else {
 					time(&tsec);
 					tstruct = gmtime(&tsec);
+					pkg.c = M_PART;
 					copychars((char*)&pkg.time, (char*)tstruct, 36);
 					copychars(pkg.name, usernames[i], 20);
-					copychars(pkg.msg, buffer, 144);
-					printf("%s\n", buffer);
-					for (int j = 0; j < clientsocks.size(); j++) {
-						if (usernames[j] == NULL) {
+					while (buffer[0] != M_END) {
+						printf("%s", recvpkgp->msg);
+						copychars(pkg.msg, recvpkgp->msg, 142);
+						broadcast((char*)&pkg);
+						while (recv(clientsocks[i], buffer, 200, 0) == SOCKET_ERROR) {
 							continue;
 						}
-						send(clientsocks[j], (char*)&pkg, 200, 0);
 					}
+					printf("%s\n", recvpkgp->msg);
+					pkg.c = M_END;
+					copychars(pkg.msg, recvpkgp->msg, 142);
+					broadcast((char*)&pkg);
 				}
 			}
 		}
